@@ -49,4 +49,16 @@ namespace TelegramBudgetBot.Models
         public DateTime PaidAt { get; set; } = DateTime.UtcNow;
         public string? PaymentId { get; set; }
     }
+
+    public class Payment
+    {
+        [PrimaryKey, AutoIncrement]
+        public int Id { get; set; }
+        public long UserId { get; set; }
+        public decimal Amount { get; set; }
+        public string Label { get; set; } = string.Empty;
+        public string Status { get; set; } = "pending"; // pending | confirmed
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime? ConfirmedAt { get; set; }
+    }
 }

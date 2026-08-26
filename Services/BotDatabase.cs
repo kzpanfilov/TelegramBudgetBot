@@ -19,6 +19,7 @@ namespace TelegramBudgetBot.Services
             await _db.CreateTableAsync<Reminder>();
             await _db.CreateTableAsync<Referral>();
             await _db.CreateTableAsync<PremiumUser>();
+            await _db.CreateTableAsync<Payment>();
         }
 
         public Task<int> AddTransactionAsync(Transaction tx)
@@ -170,5 +171,49 @@ namespace TelegramBudgetBot.Services
 
         public Task<int> GetPremiumCountAsync()
             => _db.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM [PremiumUser]");
+
+        // --- Payments (YuMoney) ---
+
+        public Task<int> CreatePaymentAsync(long userId, decimal amount, string label)
+            => _db.InsertAsync(new Payment { UserId = userId, Amount = amount, Label = label });
+
+        public Task<Payment?> GetPendingPaymentAsync(long userId)
+            => _db.Table<Payment>()
+                .Where(p => p.UserId == userId && p.Status == "pending")
+                .OrderByDescending(p => p.CreatedAt)
+                .FirstOrDefaultAsync();
+
+        public Task<Payment?> GetPaymentByLabelAsync(string label)
+            => _db.Table<Payment>()
+                .Where(p => p.Label == label)
+                .FirstOrDefaultAsync();
+
+        public Task ConfirmPaymentAsync(string label)
+            => _db.RunInTransactionAsync(tr =>
+            {
+                var payment = tr.Table<Payment>()
+                    .Where(p => p.Label == label && p.Status == "pending")
+                    .FirstOrDefault();
+                if (payment != null)
+                {
+                    payment.Status = "confirmed";
+                    payment.ConfirmedAt = DateTime.UtcNow;
+                    tr.Update(payment);
+                }
+            });
+
+        public async Task<Payment?> ConfirmPaymentByIdAsync(int paymentId, long adminUserId)
+        {
+            var payment = await _db.Table<Payment>()
+                .Where(p => p.Id == paymentId && p.Status == "pending")
+                .FirstOrDefaultAsync();
+            if (payment != null)
+            {
+                payment.Status = "confirmed";
+                payment.ConfirmedAt = DateTime.UtcNow;
+                await _db.UpdateAsync(payment);
+            }
+            return payment;
+        }
     }
 }

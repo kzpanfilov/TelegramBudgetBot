@@ -5,7 +5,6 @@ using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 using TelegramBudgetBot.Models;
-using Telegram.Bot.Types.Payments;
 using TelegramBudgetBot.Services;
 
 namespace TelegramBudgetBot.Handlers;
@@ -15,6 +14,9 @@ public class BotUpdateHandler
     private readonly BotDatabase _db;
     private const int FreeLimit = 20;
     private const string BotUsername = "familybudgetplus_bot";
+    private const long AdminUserId = 367170690;
+    private const string YooMoneyReceiver = "4100119296680958";
+    private const decimal PremiumPrice = 99m;
 
     private static readonly string[] DefaultCategories =
         ["еда", "транспорт", "жильё", "одежда", "здоровье", "развлечения", "связь", "образование", "прочее"];
@@ -38,27 +40,6 @@ public class BotUpdateHandler
 
     public async Task HandleUpdateAsync(ITelegramBotClient bot, Update update, CancellationToken ct)
     {
-        // Обработка успешной оплаты
-        if (update.Message is { SuccessfulPayment: { } payment } successMsg)
-        {
-            var payerId = successMsg.From?.Id ?? 0;
-            await _db.AddPremiumAsync(payerId, payment.TelegramPaymentChargeId);
-            await bot.SendMessage(successMsg.Chat.Id,
-                "🎉 Премиум активирован!\n\n" +
-                "✅ Безлимитные операции\n" +
-                "✅ Все функции бота\n\n" +
-                "Спасибо за поддержку! ❤️",
-                cancellationToken: ct);
-            return;
-        }
-
-        // Обработка подтверждения оплаты
-        if (update.PreCheckoutQuery is { } preCheckout)
-        {
-            await bot.AnswerPreCheckoutQuery(preCheckout.Id, cancellationToken: ct);
-            return;
-        }
-
         if (update.Message is not { Text: { } text } message) return;
 
         var chatId = message.Chat.Id;
@@ -115,6 +96,12 @@ public class BotUpdateHandler
                 case "/premium":
                     await HandlePremium(bot, chatId, userId, ct);
                     break;
+                case "/check":
+                    await HandleCheck(bot, chatId, userId, ct);
+                    break;
+                case "/confirm":
+                    await HandleConfirm(bot, chatId, userId, args, ct);
+                    break;
                 default:
                     await bot.SendMessage(chatId, "Неизвестная команда. Напиши /help", cancellationToken: ct);
                     break;
@@ -167,7 +154,8 @@ public class BotUpdateHandler
             /export — экспорт в CSV
             /widget — картинка баланса
             /chart — график расходов
-            /premium — безлимитные операции
+            /premium — премиум (безлимит)
+            /check — статус оплаты
             /remind [время] — напоминание (21:00)
             /group [chat_id] — семейный бюджет
 
@@ -188,7 +176,10 @@ public class BotUpdateHandler
             var count = await _db.GetMonthCountAsync(userId, DateTime.UtcNow);
             if (count >= FreeLimit && type == "expense")
             {
-                await SendPremiumInvoice(bot, chatId, ct);
+                await bot.SendMessage(chatId,
+                    "🚫 Достигнут лимит 20 операций в месяц.\n" +
+                    "Напиши /premium чтобы получить безлимит!",
+                    cancellationToken: ct);
                 return;
             }
         }
@@ -509,32 +500,103 @@ public class BotUpdateHandler
         }
 
         var premiumCount = await _db.GetPremiumCountAsync();
+        var label = $"premium_{userId}_{DateTime.UtcNow:yyyyMMddHHmmss}";
+
+        await _db.CreatePaymentAsync(userId, PremiumPrice, label);
+
+        var paymentLink = $"https://yoomoney.ru/payments/quick-pay?receiver={YooMoneyReceiver}&sum={(int)PremiumPrice}&label={label}";
+
+        var keyboard = new InlineKeyboardMarkup(new[]
+        {
+            new[] { InlineKeyboardButton.WithUrl("💳 Оплатить 99₽", paymentLink) },
+            new[] { InlineKeyboardButton.WithCallbackData("✅ Я оплатил — проверить", $"/check") }
+        });
 
         await bot.SendMessage(chatId,
-            "⭐ *Премиум Бюджет+*\n\n" +
-            "*Что даёт:*\n" +
-            "✅ Безлимитные операции (бесплатно — 20/мес)\n" +
-            "✅ Все команды без ограничений\n" +
-            "✅ Приоритетная поддержка\n\n" +
-            "*Стоимость:* 99 Telegram Stars (≈99₽)\n" +
-            $"*Премиум-пользователей:* {premiumCount}\n\n" +
-            "Нажми кнопку ниже для оплаты:",
-            parseMode: Telegram.Bot.Types.Enums.ParseMode.Markdown,
+            $"⭐ *Премиум Бюджет\\+*\n\n" +
+            $"*Что даёт:*\n" +
+            $"✅ Безлимитные операции \\(бесплатно — 20/мес\\)\n" +
+            $"✅ Все команды без ограничений\n" +
+            $"✅ Приоритетная поддержка\n\n" +
+            $"*Стоимость:* 99₽\n" +
+            $"*Премиум\\-пользователей:* {premiumCount}\n\n" +
+            $"*Как оплатить:*\n" +
+            $"1\\. Нажми «Оплатить 99₽»\n" +
+            $"2\\. Оплати в ЮMoney\n" +
+            $"3\\. Нажми «Я оплатил — проверить»\n" +
+            $"4\\. Админ подтвердит вручную\n\n" +
+            $"*ID оплаты:* `{label}`",
+            parseMode: ParseMode.MarkdownV2,
+            replyMarkup: keyboard,
             cancellationToken: ct);
-
-        await SendPremiumInvoice(bot, chatId, ct);
     }
 
-    private static async Task SendPremiumInvoice(ITelegramBotClient bot, long chatId, CancellationToken ct)
+    private async Task HandleCheck(ITelegramBotClient bot, long chatId, long userId, CancellationToken ct)
     {
-        await bot.SendInvoice(
-            chatId: chatId,
-            title: "Бюджет+ Премиум",
-            description: "Безлимитные операции + все функции бота навсегда",
-            providerToken: "",
-            currency: "XTR",
-            prices: [new LabeledPrice("Премиум", 99)],
-            payload: "premium_unlock",
+        var pending = await _db.GetPendingPaymentAsync(userId);
+        if (pending == null)
+        {
+            await bot.SendMessage(chatId,
+                "🔍 Нет ожидающих оплат.\n" +
+                "Используй /premium чтобы оплатить.",
+                cancellationToken: ct);
+            return;
+        }
+
+        await bot.SendMessage(chatId,
+            $"🔍 Оплата #{pending.Id} в обработке.\n\n" +
+            $"Сумма: {pending.Amount:N0}₽\n" +
+            $"ID: `{pending.Label}`\n\n" +
+            $"Админ проверит и подтвердит.\n" +
+            $"Обычно это занимает несколько минут.",
+            parseMode: ParseMode.MarkdownV2,
+            cancellationToken: ct);
+    }
+
+    private async Task HandleConfirm(ITelegramBotClient bot, long chatId, long userId, string[] args, CancellationToken ct)
+    {
+        if (userId != AdminUserId)
+        {
+            await bot.SendMessage(chatId, "❌ Только админ может подтверждать оплаты.", cancellationToken: ct);
+            return;
+        }
+
+        if (args.Length < 2)
+        {
+            await bot.SendMessage(chatId,
+                "Формат: /confirm [ID оплаты]\n" +
+                "Пример: /confirm premium_123456_20250101120000",
+                cancellationToken: ct);
+            return;
+        }
+
+        var label = args[1];
+        var payment = await _db.GetPaymentByLabelAsync(label);
+        if (payment == null)
+        {
+            await bot.SendMessage(chatId, $"❌ Оплата `{label}` не найдена.", parseMode: ParseMode.MarkdownV2, cancellationToken: ct);
+            return;
+        }
+
+        if (payment.Status == "confirmed")
+        {
+            await bot.SendMessage(chatId, $"⚠️ Оплата `{label}` уже подтверждена.", parseMode: ParseMode.MarkdownV2, cancellationToken: ct);
+            return;
+        }
+
+        await _db.ConfirmPaymentAsync(label);
+        await _db.AddPremiumAsync(payment.UserId, label);
+
+        await bot.SendMessage(chatId,
+            $"✅ Оплата #{payment.Id} подтверждена!\n" +
+            $"Пользователь {payment.UserId} получил премиум.",
+            cancellationToken: ct);
+
+        await bot.SendMessage(payment.UserId,
+            "🎉 Премиум активирован!\n\n" +
+            "✅ Безлимитные операции\n" +
+            "✅ Все функции бота\n\n" +
+            "Спасибо за поддержку! ❤️",
             cancellationToken: ct);
     }
 
