@@ -41,4 +41,12 @@ namespace TelegramBudgetBot.Models
         public long InvitedId { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     }
+
+    public class PremiumUser
+    {
+        [PrimaryKey]
+        public long UserId { get; set; }
+        public DateTime PaidAt { get; set; } = DateTime.UtcNow;
+        public string? PaymentId { get; set; }
+    }
 }

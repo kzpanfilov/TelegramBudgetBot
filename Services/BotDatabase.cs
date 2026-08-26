@@ -18,6 +18,7 @@ namespace TelegramBudgetBot.Services
             await _db.CreateTableAsync<CategoryLimit>();
             await _db.CreateTableAsync<Reminder>();
             await _db.CreateTableAsync<Referral>();
+            await _db.CreateTableAsync<PremiumUser>();
         }
 
         public Task<int> AddTransactionAsync(Transaction tx)
@@ -158,5 +159,16 @@ namespace TelegramBudgetBot.Services
         {
             return await _db.Table<Transaction>().ToListAsync();
         }
+
+        // --- Premium ---
+
+        public Task<bool> IsPremiumAsync(long userId)
+            => _db.ExecuteScalarAsync<bool>("SELECT COUNT(*) > 0 FROM [PremiumUser] WHERE UserId = ?", userId);
+
+        public Task AddPremiumAsync(long userId, string? paymentId = null)
+            => _db.InsertAsync(new PremiumUser { UserId = userId, PaymentId = paymentId });
+
+        public Task<int> GetPremiumCountAsync()
+            => _db.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM [PremiumUser]");
     }
 }

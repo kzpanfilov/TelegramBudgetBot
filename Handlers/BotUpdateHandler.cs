@@ -5,6 +5,7 @@ using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 using TelegramBudgetBot.Models;
+using Telegram.Bot.Types.Payments;
 using TelegramBudgetBot.Services;
 
 namespace TelegramBudgetBot.Handlers;
@@ -37,6 +38,27 @@ public class BotUpdateHandler
 
     public async Task HandleUpdateAsync(ITelegramBotClient bot, Update update, CancellationToken ct)
     {
+        // Обработка успешной оплаты
+        if (update.Message is { SuccessfulPayment: { } payment } successMsg)
+        {
+            var payerId = successMsg.From?.Id ?? 0;
+            await _db.AddPremiumAsync(payerId, payment.TelegramPaymentChargeId);
+            await bot.SendMessage(successMsg.Chat.Id,
+                "🎉 Премиум активирован!\n\n" +
+                "✅ Безлимитные операции\n" +
+                "✅ Все функции бота\n\n" +
+                "Спасибо за поддержку! ❤️",
+                cancellationToken: ct);
+            return;
+        }
+
+        // Обработка подтверждения оплаты
+        if (update.PreCheckoutQuery is { } preCheckout)
+        {
+            await bot.AnswerPreCheckoutQuery(preCheckout.Id, cancellationToken: ct);
+            return;
+        }
+
         if (update.Message is not { Text: { } text } message) return;
 
         var chatId = message.Chat.Id;
@@ -90,6 +112,9 @@ public class BotUpdateHandler
                 case "/chart":
                     await HandleChart(bot, chatId, userId, ct);
                     break;
+                case "/premium":
+                    await HandlePremium(bot, chatId, userId, ct);
+                    break;
                 default:
                     await bot.SendMessage(chatId, "Неизвестная команда. Напиши /help", cancellationToken: ct);
                     break;
@@ -141,6 +166,7 @@ public class BotUpdateHandler
             /export — экспорт в CSV
             /widget — картинка баланса
             /chart — график расходов
+            /premium — безлимитные операции
             /remind [время] — напоминание (21:00)
             /group [chat_id] — семейный бюджет
 
@@ -155,19 +181,15 @@ public class BotUpdateHandler
 
     private async Task HandleAdd(ITelegramBotClient bot, long chatId, long userId, string[] args, string type, CancellationToken ct)
     {
-        var count = await _db.GetMonthCountAsync(userId, DateTime.UtcNow);
-        if (count >= FreeLimit && type == "expense")
+        var isPremium = await _db.IsPremiumAsync(userId);
+        if (!isPremium)
         {
-            var keyboard = new InlineKeyboardMarkup(new[]
+            var count = await _db.GetMonthCountAsync(userId, DateTime.UtcNow);
+            if (count >= FreeLimit && type == "expense")
             {
-                new[] { InlineKeyboardButton.WithUrl("🔓 Снять лимит — 99₽", "https://t.me/your_payment_link") }
-            });
-            await bot.SendMessage(chatId,
-                $"⚠ Бесплатный лимит: {FreeLimit} операций в месяц.\n\n" +
-                $"Осталось: {FreeLimit - count} из {FreeLimit}\n" +
-                $"Сними лимит или подожди до следующего месяца.",
-                replyMarkup: keyboard, cancellationToken: ct);
-            return;
+                await SendPremiumInvoice(bot, chatId, ct);
+                return;
+            }
         }
 
         if (args.Length < 3)
@@ -471,6 +493,47 @@ public class BotUpdateHandler
 
         await bot.SendPhoto(chatId, InputFile.FromStream(stream, "chart.png"),
             caption: $"📊 График расходов за {now:MMMM yyyy}",
+            cancellationToken: ct);
+    }
+
+    private async Task HandlePremium(ITelegramBotClient bot, long chatId, long userId, CancellationToken ct)
+    {
+        if (await _db.IsPremiumAsync(userId))
+        {
+            await bot.SendMessage(chatId,
+                "✅ У тебя уже есть премиум!\n\n" +
+                "Безлимитные операции, все функции бота доступны.",
+                cancellationToken: ct);
+            return;
+        }
+
+        var premiumCount = await _db.GetPremiumCountAsync();
+
+        await bot.SendMessage(chatId,
+            "⭐ *Премиум Бюджет+*\n\n" +
+            "*Что даёт:*\n" +
+            "✅ Безлимитные операции (бесплатно — 20/мес)\n" +
+            "✅ Все команды без ограничений\n" +
+            "✅ Приоритетная поддержка\n\n" +
+            "*Стоимость:* 99 Telegram Stars (≈99₽)\n" +
+            $"*Премиум-пользователей:* {premiumCount}\n\n" +
+            "Нажми кнопку ниже для оплаты:",
+            parseMode: Telegram.Bot.Types.Enums.ParseMode.Markdown,
+            cancellationToken: ct);
+
+        await SendPremiumInvoice(bot, chatId, ct);
+    }
+
+    private static async Task SendPremiumInvoice(ITelegramBotClient bot, long chatId, CancellationToken ct)
+    {
+        await bot.SendInvoice(
+            chatId: chatId,
+            title: "Бюджет+ Премиум",
+            description: "Безлимитные операции + все функции бота навсегда",
+            providerToken: "",
+            currency: "XTR",
+            prices: [new LabeledPrice("Премиум", 99)],
+            payload: "premium_unlock",
             cancellationToken: ct);
     }
 
