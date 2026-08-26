@@ -96,6 +96,9 @@ public class BotUpdateHandler
                 case "/premium":
                     await HandlePremium(bot, chatId, userId, ct);
                     break;
+                case "/pay":
+                    await HandlePay(bot, chatId, userId, args, ct);
+                    break;
                 case "/check":
                     await HandleCheck(bot, chatId, userId, ct);
                     break;
@@ -155,7 +158,7 @@ public class BotUpdateHandler
             /widget — картинка баланса
             /chart — график расходов
             /premium — премиум (безлимит)
-            /check — статус оплаты
+            /pay [ID] — активировать премиум по ID операции
             /remind [время] — напоминание (21:00)
             /group [chat_id] — семейный бюджет
 
@@ -523,9 +526,9 @@ public class BotUpdateHandler
             $"*Как оплатить:*\n" +
             $"1\\. Нажми «Оплатить 99₽»\n" +
             $"2\\. Оплати в ЮMoney\n" +
-            $"3\\. Нажми «Я оплатил — проверить»\n" +
-            $"4\\. Админ подтвердит вручную\n\n" +
-            $"*ID оплаты:* `{label}`",
+            $"3\\. Скопируй ID операции из чека\n" +
+            $"4\\. Отправь: /pay IDОПЕРАЦИИ\n\n" +
+            $"*Пример:* /pay 1234567890123456",
             parseMode: ParseMode.MarkdownV2,
             replyMarkup: keyboard,
             cancellationToken: ct);
@@ -593,6 +596,56 @@ public class BotUpdateHandler
             cancellationToken: ct);
 
         await bot.SendMessage(payment.UserId,
+            "🎉 Премиум активирован!\n\n" +
+            "✅ Безлимитные операции\n" +
+            "✅ Все функции бота\n\n" +
+            "Спасибо за поддержку! ❤️",
+            cancellationToken: ct);
+    }
+
+    private async Task HandlePay(ITelegramBotClient bot, long chatId, long userId, string[] args, CancellationToken ct)
+    {
+        if (await _db.IsPremiumAsync(userId))
+        {
+            await bot.SendMessage(chatId, "✅ У тебя уже есть премиум!", cancellationToken: ct);
+            return;
+        }
+
+        if (args.Length < 2)
+        {
+            await bot.SendMessage(chatId,
+                "Формат: /pay [ID операции ЮMoney]\n" +
+                "Пример: /pay 1234567890123456\n\n" +
+                "ID операции найдёшь в чеке ЮMoney.",
+                cancellationToken: ct);
+            return;
+        }
+
+        var operationId = args[1].Trim();
+
+        if (operationId.Length < 10 || !operationId.All(char.IsDigit))
+        {
+            await bot.SendMessage(chatId,
+                "❌ Неверный формат ID операции.\n" +
+                "ID должен содержать только цифры (10-20 символов).\n" +
+                "Пример: /pay 1234567890123456",
+                cancellationToken: ct);
+            return;
+        }
+
+        var label = $"pay_{userId}_{operationId}";
+        var existing = await _db.GetPaymentByLabelAsync(label);
+        if (existing != null && existing.Status == "confirmed")
+        {
+            await bot.SendMessage(chatId, "⚠️ Этот ID операции уже использован.", cancellationToken: ct);
+            return;
+        }
+
+        await _db.CreatePaymentAsync(userId, PremiumPrice, label);
+        await _db.ConfirmPaymentAsync(label);
+        await _db.AddPremiumAsync(userId, operationId);
+
+        await bot.SendMessage(chatId,
             "🎉 Премиум активирован!\n\n" +
             "✅ Безлимитные операции\n" +
             "✅ Все функции бота\n\n" +
