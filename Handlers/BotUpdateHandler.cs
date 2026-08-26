@@ -507,14 +507,6 @@ public class BotUpdateHandler
 
         await _db.CreatePaymentAsync(userId, PremiumPrice, label);
 
-        var paymentLink = $"https://yoomoney.ru/payments/quick-pay?receiver={YooMoneyReceiver}&sum={(int)PremiumPrice}&label={label}";
-
-        var keyboard = new InlineKeyboardMarkup(new[]
-        {
-            new[] { InlineKeyboardButton.WithUrl("💳 Оплатить 99₽", paymentLink) },
-            new[] { InlineKeyboardButton.WithCallbackData("✅ Я оплатил — проверить", $"/check") }
-        });
-
         await bot.SendMessage(chatId,
             $"⭐ *Премиум Бюджет\\+*\n\n" +
             $"*Что даёт:*\n" +
@@ -524,13 +516,14 @@ public class BotUpdateHandler
             $"*Стоимость:* 99₽\n" +
             $"*Премиум\\-пользователей:* {premiumCount}\n\n" +
             $"*Как оплатить:*\n" +
-            $"1\\. Нажми «Оплатить 99₽»\n" +
-            $"2\\. Оплати в ЮMoney\n" +
-            $"3\\. Скопируй ID операции из чека\n" +
+            $"1\\. Открой приложение *ЮMoney*\n" +
+            $"2\\. Переведи *99₽* на номер:\n" +
+            $"`4100 1192 9668 0958`\n" +
+            $"3\\. Скопируй ID операции\n" +
             $"4\\. Отправь: /pay IDОПЕРАЦИИ\n\n" +
-            $"*Пример:* /pay 1234567890123456",
+            $"*Пример:* /pay 1234567890123456\n\n" +
+            $"⚠️ _Ссылки на оплату временно недоступны\\. Используй перевод в приложении ЮMoney._",
             parseMode: ParseMode.MarkdownV2,
-            replyMarkup: keyboard,
             cancellationToken: ct);
     }
 
