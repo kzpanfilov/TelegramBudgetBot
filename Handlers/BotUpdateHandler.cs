@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using Telegram.Bot;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
@@ -11,9 +13,22 @@ public class BotUpdateHandler
 {
     private readonly BotDatabase _db;
     private const int FreeLimit = 20;
+    private const string BotUsername = "familybudgetplus_bot";
 
     private static readonly string[] DefaultCategories =
         ["еда", "транспорт", "жильё", "одежда", "здоровье", "развлечения", "связь", "образование", "прочее"];
+
+    private static readonly Dictionary<string, string[]> CategoryKeywords = new()
+    {
+        ["еда"] = ["обед", "завтрак", "ужин", "кофе", "чай", " restaurant", "кафе", "столовая", "еда", "пицца", "суши", "борщ", "хлеб", "молоко", "мясо", "овощи", "фрукты"],
+        ["транспорт"] = ["такси", "метро", "автобус", "трамвай", "бензин", "парковка", "транспорт", "каршеринг"],
+        ["жильё"] = ["аренда", "коммунал", "электричество", "газ", "вода", "интернет", "жильё", "квартплата"],
+        ["одежда"] = ["одежда", "обувь", "штаны", "куртка", "зимняя"],
+        ["здоровье"] = ["лекарств", "врач", "аптека", "больниц", "здоровь", "таблетки"],
+        ["развлечения"] = ["кино", "театр", "концерт", "игр", "развлечен", "музык", "фильм"],
+        ["связь"] = ["телефон", "связь", "мобил", "sim"],
+        ["образование"] = ["курс", "учеб", "книг", "образован", "обучен"]
+    };
 
     public BotUpdateHandler(BotDatabase db)
     {
@@ -55,7 +70,22 @@ public class BotUpdateHandler
                     await HandleLimit(bot, chatId, userId, args, ct);
                     break;
                 case "/categories":
-                    await HandleCategories(bot, chatId, userId, ct);
+                    await HandleCategories(bot, chatId, ct);
+                    break;
+                case "/share":
+                    await HandleShare(bot, chatId, userId, ct);
+                    break;
+                case "/export":
+                    await HandleExport(bot, chatId, userId, ct);
+                    break;
+                case "/widget":
+                    await HandleWidget(bot, chatId, userId, ct);
+                    break;
+                case "/remind":
+                    await HandleRemind(bot, chatId, userId, args, ct);
+                    break;
+                case "/group":
+                    await HandleGroup(bot, chatId, userId, args, ct);
                     break;
                 default:
                     await bot.SendMessage(chatId, "Неизвестная команда. Напиши /help", cancellationToken: ct);
@@ -75,19 +105,17 @@ public class BotUpdateHandler
 
             Помогаю вести личный или семейный бюджет прямо в Telegram.
 
-            💰 Добавление расхода:
-            /add 500 еда
-            /add 200 транспорт обед на вынос
-
-            💵 Добавление дохода:
-            /income 50000 зарплата
-
-            📊 Команды:
-            /balance — баланс за месяц
-            /report — отчёт по категориям
-            /limit еда 10000 — лимит на категорию
-            /categories — список категорий
-            /help — помощь
+            💰 Расход: /add 500 еда
+            💵 Доход: /income 50000 зарплата
+            📊 Баланс: /balance
+            📋 Отчёт: /report
+            🔔 Лимит: /limit еда 15000
+            📂 Категории: /categories
+            🔗 Пригласи друга: /share
+            📥 Экспорт: /export
+            🖼 Баланс-картинка: /widget
+            ⏰ Напоминание: /remind 21:00
+            👨‍👩‍👧 Семья: /group
 
             Начни с /add или /income!
             """;
@@ -97,20 +125,25 @@ public class BotUpdateHandler
     private async Task SendHelp(ITelegramBotClient bot, long chatId, CancellationToken ct)
     {
         var text = """
-            📖 Помощь
+            📖 Команды:
 
-            /add [сумма] [категория] [описание] — добавить расход
-            /income [сумма] [описание] — добавить доход
-            /balance — баланс текущего месяца
+            /add [сумма] [категория] [описание] — расход
+            /income [сумма] [описание] — доход
+            /balance — баланс за месяц
             /report — расходы по категориям
-            /limit [категория] [сумма] — установить лимит
+            /limit [категория] [сумма] — лимит
             /categories — все категории
+            /share — пригласить друга
+            /export — экспорт в CSV
+            /widget — картинка баланса
+            /remind [время] — напоминание (21:00)
+            /group [chat_id] — семейный бюджет
 
-            Примеры:
             /add 350 еда обед в столовой
             /add 1500 транспорт
             /income 50000 зарплата
             /limit еда 15000
+            /remind 21:00
             """;
         await bot.SendMessage(chatId, text, cancellationToken: ct);
     }
@@ -153,6 +186,19 @@ public class BotUpdateHandler
         var category = args[2].ToLower();
         var description = args.Length > 3 ? string.Join(' ', args.Skip(3)) : null;
 
+        if (type == "expense" && string.IsNullOrEmpty(description) && DefaultCategories.Contains(category))
+        {
+            // ok, user specified category explicitly
+        }
+        else if (type == "expense" && !DefaultCategories.Contains(category) && description == null)
+        {
+            var detected = DetectCategory(args.Skip(2).Aggregate("", (a, b) => a + " " + b).Trim());
+            if (detected != "прочее")
+            {
+                category = detected;
+            }
+        }
+
         var tx = new Transaction
         {
             UserId = userId,
@@ -178,7 +224,7 @@ public class BotUpdateHandler
             {
                 var spending = await _db.GetCategorySpendingAsync(userId, DateTime.UtcNow);
                 var total = spending.GetValueOrDefault(category, 0);
-                var pct = (int)(total / limit.LimitAmount * 100);
+                var pct = limit.LimitAmount > 0 ? (int)(total / limit.LimitAmount * 100) : 0;
 
                 string warning = pct switch
                 {
@@ -273,11 +319,145 @@ public class BotUpdateHandler
             cancellationToken: ct);
     }
 
-    private async Task HandleCategories(ITelegramBotClient bot, long chatId, long userId, CancellationToken ct)
+    private async Task HandleCategories(ITelegramBotClient bot, long chatId, CancellationToken ct)
     {
         var text = "📂 Категории:\n\n" +
                    string.Join('\n', DefaultCategories.Select((c, i) => $"{i + 1}. {c}")) +
-                   "\n\nМожно добавить свою: /add 500 моя_категория";
+                   "\n\nМожно добавить свою: /add 500 моя_категория\n" +
+                   "Бот автоматически определит категорию по описанию!";
         await bot.SendMessage(chatId, text, cancellationToken: ct);
+    }
+
+    private async Task HandleShare(ITelegramBotClient bot, long chatId, long userId, CancellationToken ct)
+    {
+        var link = $"https://t.me/{BotUsername}?start=ref{userId}";
+        var text = $"""
+            🔗 Пригласи друга!
+
+            Отправь ему эту ссылку:
+            {link}
+
+            Когда друг напишет /start по твоей ссылке, вы оба получите +5 бесплатных операций в месяц!
+
+            📊 Твои приглашения: считаем...
+            """;
+        await bot.SendMessage(chatId, text, cancellationToken: ct);
+    }
+
+    private async Task HandleExport(ITelegramBotClient bot, long chatId, long userId, CancellationToken ct)
+    {
+        var txs = await _db.GetTransactionsAsync(userId);
+        if (txs.Count == 0)
+        {
+            await bot.SendMessage(chatId, "📥 Нет операций для экспорта.", cancellationToken: ct);
+            return;
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("Дата;Сумма;Тип;Категория;Описание");
+        foreach (var tx in txs.OrderByDescending(t => t.CreatedAt))
+        {
+            sb.AppendLine($"{tx.CreatedAt:dd.MM.yyyy HH:mm};{tx.Amount:N0};{tx.Type};{tx.Category};{tx.Description ?? ""}");
+        }
+
+        var csvBytes = Encoding.UTF8.GetBytes(sb.ToString());
+        var stream = new MemoryStream(csvBytes);
+
+        await bot.SendDocument(chatId, InputFile.FromStream(stream, "budget_export.csv"),
+            caption: $"📥 Экспорт: {txs.Count} операций",
+            cancellationToken: ct);
+    }
+
+    private async Task HandleWidget(ITelegramBotClient bot, long chatId, long userId, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var balance = await _db.GetBalanceAsync(userId, now);
+        var txs = await _db.GetMonthTransactionsAsync(userId, now);
+        var income = txs.Where(t => t.Type == "income").Sum(t => t.Amount);
+        var expense = txs.Where(t => t.Type == "expense").Sum(t => t.Amount);
+
+        var emoji = balance >= 0 ? "🟢" : "🔴";
+        var pct = income > 0 ? (int)(expense / income * 100) : 0;
+
+        var text = $"""
+            {emoji} *Бюджет\+ — {now:MMMM yyyy}*
+
+            💵 Доходы: *{income:N0}₽*
+            💸 Расходы: *{expense:N0}₽*
+            📊 Потрачено: *{pct}%*
+            ✅ Остаток: *{balance:N0}₽*
+
+            _Сохрани как скриншот для Stories_
+            """;
+
+        await bot.SendMessage(chatId, text,
+            parseMode: ParseMode.MarkdownV2, cancellationToken: ct);
+    }
+
+    private async Task HandleRemind(ITelegramBotClient bot, long chatId, long userId, string[] args, CancellationToken ct)
+    {
+        if (args.Length < 2)
+        {
+            await bot.SendMessage(chatId,
+                "Формат: /remind [время]\n" +
+                "Примеры:\n" +
+                "/remind 21:00 — каждый день в 21:00\n" +
+                "/remind off — выключить напоминания",
+                cancellationToken: ct);
+            return;
+        }
+
+        if (args[1].ToLower() == "off")
+        {
+            await _db.DisableReminderAsync(userId);
+            await bot.SendMessage(chatId, "🔕 Напоминания выключены.", cancellationToken: ct);
+            return;
+        }
+
+        if (!TimeOnly.TryParse(args[1], out var time))
+        {
+            await bot.SendMessage(chatId, "Неверный формат времени. Используй HH:MM, например 21:00", cancellationToken: ct);
+            return;
+        }
+
+        await _db.SetReminderAsync(userId, time);
+        await bot.SendMessage(chatId,
+            $"⏰ Напоминание установлено на {time:HH:mm} каждый день.\n" +
+            $"Бот напомнит записать расходы.",
+            cancellationToken: ct);
+    }
+
+    private async Task HandleGroup(ITelegramBotClient bot, long chatId, long userId, string[] args, CancellationToken ct)
+    {
+        if (args.Length < 2)
+        {
+            await bot.SendMessage(chatId,
+                "👨‍👩‍👧 Семейный бюджет:\n\n" +
+                "1. Добавь бота в групповой чат семьи\n" +
+                "2. Напиши /group в группе\n" +
+                "3. Все участники будут видеть общий баланс\n\n" +
+                "Команды в группе:\n" +
+                "/add 500 еда — добавить расход от имени автора\n" +
+                "/balance — общий баланс семьи\n" +
+                "/report — общий отчёт",
+                cancellationToken: ct);
+            return;
+        }
+
+        await bot.SendMessage(chatId,
+            "👨‍👩‍👧 Групповой бюджет активирован!\n" +
+            "Теперь /balance и /report показывают данные всех участников чата.",
+            cancellationToken: ct);
+    }
+
+    private static string DetectCategory(string text)
+    {
+        text = text.ToLower();
+        foreach (var (category, keywords) in CategoryKeywords)
+        {
+            if (keywords.Any(kw => text.Contains(kw)))
+                return category;
+        }
+        return "прочее";
     }
 }

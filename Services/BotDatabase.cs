@@ -16,6 +16,8 @@ namespace TelegramBudgetBot.Services
         {
             await _db.CreateTableAsync<Transaction>();
             await _db.CreateTableAsync<CategoryLimit>();
+            await _db.CreateTableAsync<Reminder>();
+            await _db.CreateTableAsync<Referral>();
         }
 
         public Task<int> AddTransactionAsync(Transaction tx)
@@ -98,6 +100,63 @@ namespace TelegramBudgetBot.Services
             return _db.ExecuteScalarAsync<int>(
                 "SELECT COUNT(*) FROM [Transaction] WHERE UserId = ? AND CreatedAt >= ? AND CreatedAt < ?",
                 userId, start, end);
+        }
+
+        public Task SetReminderAsync(long userId, TimeOnly time)
+        {
+            return _db.RunInTransactionAsync(tr =>
+            {
+                var existing = tr.Table<Reminder>()
+                    .Where(r => r.UserId == userId)
+                    .FirstOrDefault();
+                if (existing != null)
+                {
+                    existing.Hour = time.Hour;
+                    existing.Minute = time.Minute;
+                    existing.Enabled = true;
+                    tr.Update(existing);
+                }
+                else
+                {
+                    tr.Insert(new Reminder
+                    {
+                        UserId = userId,
+                        Hour = time.Hour,
+                        Minute = time.Minute,
+                        Enabled = true
+                    });
+                }
+            });
+        }
+
+        public Task DisableReminderAsync(long userId)
+        {
+            return _db.RunInTransactionAsync(tr =>
+            {
+                var existing = tr.Table<Reminder>()
+                    .Where(r => r.UserId == userId)
+                    .FirstOrDefault();
+                if (existing != null)
+                {
+                    existing.Enabled = false;
+                    tr.Update(existing);
+                }
+            });
+        }
+
+        public Task<List<Reminder>> GetActiveRemindersAsync()
+            => _db.Table<Reminder>().Where(r => r.Enabled).ToListAsync();
+
+        public Task AddReferralAsync(long inviterId, long invitedId)
+            => _db.InsertAsync(new Referral { InviterId = inviterId, InvitedId = invitedId });
+
+        public Task<int> GetReferralCountAsync(long userId)
+            => _db.ExecuteScalarAsync<int>(
+                "SELECT COUNT(*) FROM [Referral] WHERE InviterId = ?", userId);
+
+        public async Task<List<Transaction>> GetGroupTransactionsAsync(long chatId)
+        {
+            return await _db.Table<Transaction>().ToListAsync();
         }
     }
 }
