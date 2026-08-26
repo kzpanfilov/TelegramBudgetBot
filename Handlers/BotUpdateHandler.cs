@@ -545,7 +545,6 @@ public class BotUpdateHandler
             $"ID: `{pending.Label}`\n\n" +
             $"Админ проверит и подтвердит.\n" +
             $"Обычно это занимает несколько минут.",
-            parseMode: ParseMode.MarkdownV2,
             cancellationToken: ct);
     }
 
