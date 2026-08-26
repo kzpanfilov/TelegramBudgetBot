@@ -87,6 +87,9 @@ public class BotUpdateHandler
                 case "/group":
                     await HandleGroup(bot, chatId, userId, args, ct);
                     break;
+                case "/chart":
+                    await HandleChart(bot, chatId, userId, ct);
+                    break;
                 default:
                     await bot.SendMessage(chatId, "Неизвестная команда. Напиши /help", cancellationToken: ct);
                     break;
@@ -114,6 +117,7 @@ public class BotUpdateHandler
             🔗 Пригласи друга: /share
             📥 Экспорт: /export
             🖼 Баланс-картинка: /widget
+            📊 График: /chart
             ⏰ Напоминание: /remind 21:00
             👨‍👩‍👧 Семья: /group
 
@@ -136,6 +140,7 @@ public class BotUpdateHandler
             /share — пригласить друга
             /export — экспорт в CSV
             /widget — картинка баланса
+            /chart — график расходов
             /remind [время] — напоминание (21:00)
             /group [chat_id] — семейный бюджет
 
@@ -447,6 +452,25 @@ public class BotUpdateHandler
         await bot.SendMessage(chatId,
             "👨‍👩‍👧 Групповой бюджет активирован!\n" +
             "Теперь /balance и /report показывают данные всех участников чата.",
+            cancellationToken: ct);
+    }
+
+    private async Task HandleChart(ITelegramBotClient bot, long chatId, long userId, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var spending = await _db.GetCategorySpendingAsync(userId, now);
+
+        if (spending.Count == 0)
+        {
+            await bot.SendMessage(chatId, "📊 Пока нет расходов за этот месяц.", cancellationToken: ct);
+            return;
+        }
+
+        var pngBytes = ChartGenerator.GenerateBarChart(spending, $"Расходы — {now:MMMM yyyy}");
+        var stream = new MemoryStream(pngBytes);
+
+        await bot.SendPhoto(chatId, InputFile.FromStream(stream, "chart.png"),
+            caption: $"📊 График расходов за {now:MMMM yyyy}",
             cancellationToken: ct);
     }
 
