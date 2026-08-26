@@ -145,6 +145,7 @@ public class BotUpdateHandler
             📊 График: /chart
             ⏰ Напоминание: /remind 21:00
             👨‍👩‍👧 Семья: /group
+            ⭐ Премиум: /premium
 
             Начни с /add или /income!
             """;
